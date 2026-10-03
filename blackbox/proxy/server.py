@@ -292,7 +292,9 @@ async def _forward_and_record(
 @app.api_route("/v1/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
 async def proxy_openai_compatible(request: Request, path: str) -> Response:
     upstream = request.headers.get(HEADER_TARGET_BASE, settings.openai_base_url)
-    return await _forward_and_record(request, "openai", upstream, f"v1/{path}")
+    # If upstream already ends with v1 or includes openai base, avoid prepending v1 twice
+    forward_path = path if upstream.rstrip("/").endswith("v1") or "openai" in upstream else f"v1/{path}"
+    return await _forward_and_record(request, "openai", upstream, forward_path)
 
 
 @app.api_route("/google/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
