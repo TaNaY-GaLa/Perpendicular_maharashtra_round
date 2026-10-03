@@ -1,0 +1,67 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+eggs/
+parts/
+var/
+sdist/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+.installed.cfg
+*.egg-link
+MANIFEST
+
+# Virtual Environments
+.venv/
+venv/
+env/
+ENV/
+.env
+
+# Secrets / Env Files
+.env.local
+.env.*.local
+*.env
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Test & Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+*.cover
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Distribution
+*.whl
+*.tar.gz
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Mypy
+.mypy_cache/
