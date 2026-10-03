@@ -55,13 +55,13 @@ async def call_gemini_via_blackbox(
         "Authorization": f"Bearer {api_key}",
         "x-blackbox-run-id": run_id,
         "x-blackbox-agent": agent_name,
-        "x-target-base": "https://generativelanguage.googleapis.com/v1beta/openai/",
+        "x-target-base": "https://generativelanguage.googleapis.com/v1beta/openai",
     }
     if replay_session_id:
         headers["x-blackbox-replay-session"] = replay_session_id
 
     payload: Dict[str, Any] = {
-        "model": "gemini-2.0-flash",
+        "model": "gemini-2.5-flash",
         "messages": messages,
     }
     if tools:
