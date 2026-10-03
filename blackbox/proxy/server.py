@@ -2,40 +2,31 @@
 Black Box Universal Proxy Server
 =================================
 A FastAPI reverse proxy that intercepts LLM API calls from any AI agent,
-records every request/response pair to SQLite, and forwards the traffic
-transparently to the real upstream provider.
-
-Supported provider routes
---------------------------
-/v1/...           → OpenAI / Groq / Ollama / LiteLLM / any OpenAI-compatible API
-/google/...       → Google Gemini (generativelanguage.googleapis.com)
-/anthropic/...    → Anthropic Claude (api.anthropic.com)
-/proxy/...        → Generic catch-all; set X-Target-Base header to override upstream
-
-Custom headers understood by the proxy (stripped before forwarding)
---------------------------------------------------------------------
-X-BlackBox-Run-ID    : Associates this call with a named agent run (required for grouping)
-X-BlackBox-Agent     : Human-readable agent name (optional, stored for filtering)
-X-Target-Base        : Override the upstream base URL for this request
+records every request/response pair to SQLite, supports checkpointed replay,
+and reconstructs structured agent execution trees.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 import uuid
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator, Dict, Optional
+from typing import AsyncGenerator, Dict, Optional, Any, List
 
 import httpx
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
+from pydantic import BaseModel, Field
 
 from blackbox.config import get_settings
 from blackbox.traces.models import init_db, close_db
 from blackbox.traces.recorder import TraceRecorder
+from blackbox.traces.reconstructor import StepReconstructor, AgentStep
+from blackbox.proxy.replay import ReplayEngine, ReplaySession
 from blackbox.traces.schemas import AgentRunOut, RawCallCreate, RawCallOut, RunStatusUpdate
 
 # ── Logging ────────────────────────────────────────────────────────────────────
@@ -48,12 +39,13 @@ settings = get_settings()
 HEADER_RUN_ID = "x-blackbox-run-id"
 HEADER_AGENT = "x-blackbox-agent"
 HEADER_TARGET_BASE = "x-target-base"
+HEADER_REPLAY_SESSION = "x-blackbox-replay-session"
 
 # Headers the proxy must remove before forwarding to upstream
-PROXY_HEADERS = {HEADER_RUN_ID, HEADER_AGENT, HEADER_TARGET_BASE, "host"}
+PROXY_HEADERS = {HEADER_RUN_ID, HEADER_AGENT, HEADER_TARGET_BASE, HEADER_REPLAY_SESSION, "host"}
 
 
-# ── In-process call-index counters (resets on server restart) ─────────────────
+# ── In-process call-index counters ────────────────────────────────────────────
 _run_call_counters: Dict[str, int] = {}
 _counter_lock = asyncio.Lock()
 
@@ -80,9 +72,9 @@ async def lifespan(app: FastAPI):
 
 # ── App ────────────────────────────────────────────────────────────────────────
 app = FastAPI(
-    title="Black Box Proxy",
-    description="Universal AI Agent Flight Recorder — intercepts, records, and replays LLM calls.",
-    version="1.0.0",
+    title="Black Box Proxy & Trace Engine",
+    description="Universal AI Agent Flight Recorder & Replay Engine",
+    version="1.1.0",
     lifespan=lifespan,
 )
 
@@ -94,7 +86,7 @@ app.add_middleware(
 )
 
 
-# ── Core forwarding logic ──────────────────────────────────────────────────────
+# ── Core forwarding & replay logic ─────────────────────────────────────────────
 
 async def _forward_and_record(
     request: Request,
@@ -103,16 +95,15 @@ async def _forward_and_record(
     upstream_path: str,
 ) -> Response:
     """
-    Forwards an incoming request to `upstream_base/upstream_path`, records
-    the full round-trip in SQLite, and returns the upstream response to the caller.
-
-    Handles both regular (buffered) and streaming responses.
+    Forwards incoming request to `upstream_base/upstream_path` OR serves cached
+    response if this call belongs to an active Checkpointed Replay session.
     """
     start_time = time.perf_counter()
 
     # ── Extract proxy-specific headers ────────────────────────────────────────
     run_id: str = request.headers.get(HEADER_RUN_ID) or str(uuid.uuid4())
     agent_name: str = request.headers.get(HEADER_AGENT, "unknown_agent")
+    replay_session_id: Optional[str] = request.headers.get(HEADER_REPLAY_SESSION)
 
     # ── Build forwarding headers (strip proxy-specific ones) ──────────────────
     forward_headers: Dict[str, str] = {
@@ -124,17 +115,55 @@ async def _forward_and_record(
     # ── Read request body ─────────────────────────────────────────────────────
     body_bytes: bytes = await request.body()
     try:
-        import json
         body_json: dict = json.loads(body_bytes.decode("utf-8")) if body_bytes else {}
     except Exception:
         body_json = {"_raw": body_bytes.decode("utf-8", errors="replace")}
 
-    is_streaming: bool = bool(body_json.get("stream", False))
     call_index: int = await _next_call_index(run_id)
 
-    # Ensure the run exists in DB
+    # Ensure run exists in DB
     await TraceRecorder.get_or_create_run(run_id, agent_name=agent_name)
 
+    # ── CHECKPOINTED REPLAY CHECK ─────────────────────────────────────────────
+    if replay_session_id:
+        session = ReplayEngine.get_session(replay_session_id)
+        if session:
+            # Check if this call should be served from cache
+            cached_call = await ReplayEngine.match_cached_call(session, call_index)
+            if cached_call:
+                logger.info(
+                    "⚡ [REPLAY CACHE HIT] session=%s call #%d served from cache (%s)",
+                    replay_session_id, call_index, cached_call.id
+                )
+                duration_ms = (time.perf_counter() - start_time) * 1000
+                # Record this replay call into DB
+                await TraceRecorder.record_call(
+                    RawCallCreate(
+                        run_id=run_id,
+                        call_index=call_index,
+                        provider=cached_call.provider,
+                        endpoint=cached_call.endpoint,
+                        request_headers=dict(forward_headers),
+                        request_body=body_json,
+                        response_status=cached_call.response_status,
+                        response_headers=json.loads(cached_call.response_headers_json or "{}"),
+                        response_body_text=cached_call.response_body_text,
+                        is_streaming=cached_call.is_streaming,
+                        duration_ms=0.5,  # instantaneous replay
+                    )
+                )
+                return Response(
+                    content=cached_call.response_body_text.encode("utf-8"),
+                    status_code=cached_call.response_status,
+                    media_type="application/json",
+                )
+
+            # If call_index == checkpoint_step, apply override if specified
+            body_json = ReplayEngine.apply_override(session, call_index, body_json)
+            body_bytes = json.dumps(body_json).encode("utf-8")
+
+    # ── LIVE UPSTREAM EXECUTION ────────────────────────────────────────────────
+    is_streaming: bool = bool(body_json.get("stream", False))
     target_url = f"{upstream_base.rstrip('/')}/{upstream_path.lstrip('/')}"
     if request.query_params:
         target_url += f"?{request.query_params}"
@@ -144,7 +173,6 @@ async def _forward_and_record(
         run_id, call_index, request.method, target_url, is_streaming,
     )
 
-    # ── Non-streaming ──────────────────────────────────────────────────────────
     if not is_streaming:
         try:
             async with httpx.AsyncClient(timeout=settings.upstream_timeout_seconds) as client:
@@ -197,17 +225,9 @@ async def _forward_and_record(
             )
         )
 
-        logger.info(
-            "[%s] call #%d ← %d (%.1f ms)",
-            run_id, call_index, upstream_resp.status_code, duration_ms,
-        )
-
-        # Rebuild response — strip hop-by-hop headers that cause issues
         _excluded = {"transfer-encoding", "connection", "keep-alive", "content-encoding"}
         safe_headers = {
-            k: v
-            for k, v in upstream_resp.headers.items()
-            if k.lower() not in _excluded
+            k: v for k, v in upstream_resp.headers.items() if k.lower() not in _excluded
         }
         return Response(
             content=upstream_resp.content,
@@ -215,7 +235,7 @@ async def _forward_and_record(
             headers=safe_headers,
         )
 
-    # ── Streaming ──────────────────────────────────────────────────────────────
+    # Streaming handling
     chunks: list[str] = []
 
     async def _stream_and_record() -> AsyncGenerator[bytes, None]:
@@ -263,80 +283,98 @@ async def _forward_and_record(
                     error_message=error_msg,
                 )
             )
-            logger.info(
-                "[%s] call #%d ← %d streaming done (%.1f ms, %d bytes)",
-                run_id, call_index, status_code, duration_ms, len(full_body),
-            )
 
-    return StreamingResponse(
-        _stream_and_record(),
-        media_type="text/event-stream",
-    )
+    return StreamingResponse(_stream_and_record(), media_type="text/event-stream")
 
 
 # ── Provider Routes ────────────────────────────────────────────────────────────
 
 @app.api_route("/v1/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
 async def proxy_openai_compatible(request: Request, path: str) -> Response:
-    """
-    Handles OpenAI-compatible endpoints used by:
-    OpenAI, Groq, Ollama, LiteLLM, Mistral, DeepSeek, Perplexity, etc.
-    """
     upstream = request.headers.get(HEADER_TARGET_BASE, settings.openai_base_url)
     return await _forward_and_record(request, "openai", upstream, f"v1/{path}")
 
 
 @app.api_route("/google/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
 async def proxy_google(request: Request, path: str) -> Response:
-    """
-    Handles Google Generative AI (Gemini) endpoints.
-    e.g. /google/v1beta/models/gemini-2.5-flash:generateContent
-    """
     upstream = request.headers.get(HEADER_TARGET_BASE, settings.google_base_url)
     return await _forward_and_record(request, "google", upstream, path)
 
 
 @app.api_route("/anthropic/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
 async def proxy_anthropic(request: Request, path: str) -> Response:
-    """
-    Handles Anthropic Claude endpoints.
-    e.g. /anthropic/v1/messages
-    """
     upstream = request.headers.get(HEADER_TARGET_BASE, settings.anthropic_base_url)
     return await _forward_and_record(request, "anthropic", upstream, path)
 
 
 @app.api_route("/proxy/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
 async def proxy_generic(request: Request, path: str) -> Response:
-    """
-    Generic catch-all proxy. Requires X-Target-Base header to specify upstream.
-    """
     upstream = request.headers.get(HEADER_TARGET_BASE, settings.openai_base_url)
     return await _forward_and_record(request, "generic", upstream, path)
 
 
-# ── Management & Observation API ──────────────────────────────────────────────
+# ── Step Reconstruction & Replay APIs ─────────────────────────────────────────
+
+@app.get("/api/runs/{run_id}/steps", response_model=List[AgentStep], tags=["steps"])
+async def get_run_steps(run_id: str):
+    """
+    Reconstructs the high-level agent execution steps (USER_QUERY, TOOL_CALL, TOOL_OBSERVATION, FINAL_RESPONSE)
+    from raw calls recorded for a run.
+    """
+    calls = await TraceRecorder.get_run_calls(run_id)
+    if not calls:
+        return JSONResponse({"error": "Run not found or has no calls"}, status_code=404)
+    steps = StepReconstructor.reconstruct_from_raw_calls(calls)
+    return steps
+
+
+class CreateReplayRequest(BaseModel):
+    checkpoint_step: int = Field(..., ge=1, description="Step to replay from (prior steps served from cache)")
+    override_body: Optional[Dict[str, Any]] = Field(default=None, description="Optional override payload for step K")
+
+
+@app.post("/api/runs/{run_id}/replay", tags=["replay"])
+async def init_replay_session(run_id: str, req: CreateReplayRequest):
+    """
+    Initializes a Checkpointed Replay Session for an existing run.
+    Returns session_id and headers to pass in subsequent agent calls.
+    """
+    run = await TraceRecorder.get_run(run_id)
+    if not run:
+        return JSONResponse({"error": "Run not found"}, status_code=404)
+
+    session_id = f"replay_{uuid.uuid4().hex[:8]}"
+    session = ReplayEngine.register_replay_session(
+        session_id=session_id,
+        original_run_id=run_id,
+        checkpoint_step=req.checkpoint_step,
+        override_body=req.override_body,
+    )
+    return {
+        "replay_session_id": session_id,
+        "original_run_id": run_id,
+        "checkpoint_step": req.checkpoint_step,
+        "headers_to_use": {
+            HEADER_RUN_ID: f"{run_id}_fork_{session_id}",
+            HEADER_REPLAY_SESSION: session_id,
+        },
+    }
+
+
+# ── Management APIs ───────────────────────────────────────────────────────────
 
 @app.get("/health", tags=["meta"])
 async def health_check() -> dict:
-    """Liveness probe."""
-    return {
-        "status": "ok",
-        "service": "blackbox-proxy",
-        "version": "1.0.0",
-    }
+    return {"status": "ok", "service": "blackbox-proxy", "version": "1.1.0"}
 
 
 @app.get("/api/runs", response_model=list[AgentRunOut], tags=["traces"])
 async def list_runs(limit: int = 50, offset: int = 0):
-    """List all recorded agent runs, newest first."""
-    runs = await TraceRecorder.list_runs(limit=limit, offset=offset)
-    return runs
+    return await TraceRecorder.list_runs(limit=limit, offset=offset)
 
 
 @app.get("/api/runs/{run_id}", tags=["traces"])
 async def get_run(run_id: str):
-    """Get a single run and all its raw calls."""
     run = await TraceRecorder.get_run(run_id)
     if run is None:
         return JSONResponse({"error": "not_found"}, status_code=404)
@@ -349,13 +387,11 @@ async def get_run(run_id: str):
 
 @app.patch("/api/runs/{run_id}/status", tags=["traces"])
 async def update_run_status(run_id: str, body: RunStatusUpdate):
-    """Manually update the status of a run (SUCCESS / FAILURE / RUNNING)."""
     await TraceRecorder.update_run_status(run_id, body.status)
     return {"run_id": run_id, "status": body.status}
 
 
 @app.get("/api/stats", tags=["meta"])
 async def stats():
-    """Quick summary statistics."""
     total = await TraceRecorder.count_runs()
     return {"total_runs": total}
