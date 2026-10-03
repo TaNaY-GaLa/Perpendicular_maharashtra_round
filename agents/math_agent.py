@@ -1,20 +1,19 @@
 """
-Benchmark Agent 1: Math Calculator Agent
-Executes multi-turn mathematical workflows via tools, routed through Black Box.
+Benchmark Agent 1: Math Calculator Agent (Interactive)
+Specialty: Tool-use reasoning with multi-turn calculator tool integration.
 """
 
 import asyncio
 import json
 import uuid
+import sys
 from typing import Dict, Any, List
 from agents.common import call_gemini_via_blackbox
 
 
-# Tool implementation
 def calculate(expression: str) -> str:
     """Safely evaluates basic arithmetic expressions."""
     try:
-        # Restricted safe eval for numbers and basic operators
         allowed = set("0123456789+-*/(). %")
         if not all(c in allowed for c in expression):
             return "Error: Unsupported characters in mathematical expression"
@@ -44,43 +43,57 @@ TOOLS = [
 ]
 
 
-async def run_math_agent(query: str, run_id: str = None, replay_session_id: str = None):
-    run_id = run_id or f"math_run_{uuid.uuid4().hex[:8]}"
-    print(f"\n🚀 Running Math Agent (Run ID: {run_id})")
-    print(f"❓ Query: {query}\n")
+async def run_math_agent():
+    print("\n" + "=" * 65)
+    print("  🧮 Math Calculator Agent (Interactive Mode)")
+    print("  Specialty: Decides when and how to call external calculation tools")
+    print("=" * 65)
+
+    user_query = input("\nEnter your math question (or type 'exit' to quit): ").strip()
+    if not user_query or user_query.lower() == "exit":
+        return
+
+    run_id = f"math_run_{uuid.uuid4().hex[:8]}"
+    print(f"\n🚀 Execution Started | Run ID: {run_id}")
+    print(f"❓ Prompt: {user_query}\n")
 
     messages = [
-        {"role": "system", "content": "You are a precise mathematical assistant. Always use the calculate tool for calculations."},
-        {"role": "user", "content": query},
+        {
+            "role": "system",
+            "content": "You are a precise mathematical assistant. When any arithmetic calculation is needed, you MUST invoke the `calculate` tool to compute it accurately.",
+        },
+        {"role": "user", "content": user_query},
     ]
 
-    max_turns = 5
+    max_turns = 6
     for turn in range(max_turns):
-        print(f"--- Turn {turn + 1} ---")
+        print(f"🔄 Turn {turn + 1}: Contacting Gemini via Black Box...")
         response = await call_gemini_via_blackbox(
             messages=messages,
             run_id=run_id,
             agent_name="math_agent",
             tools=TOOLS,
-            replay_session_id=replay_session_id,
         )
 
         choice = response["choices"][0]
         message = choice["message"]
         tool_calls = message.get("tool_calls")
-
-        # Append assistant turn to history
         messages.append(message)
 
         if tool_calls:
             for tc in tool_calls:
                 func_name = tc["function"]["name"]
-                args = json.loads(tc["function"]["arguments"])
-                print(f"🔧 Tool Call: {func_name}({args})")
+                try:
+                    args = json.loads(tc["function"]["arguments"])
+                except Exception:
+                    args = {"expression": tc["function"]["arguments"]}
+
+                print(f"  ⚡ Agent Action: Decided to invoke tool `{func_name}`")
+                print(f"  📥 Tool Arguments: {args}")
 
                 if func_name == "calculate":
                     result = calculate(args.get("expression", ""))
-                    print(f"💡 Tool Result: {result}")
+                    print(f"  📤 Tool Output: {result}\n")
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tc["id"],
@@ -88,12 +101,16 @@ async def run_math_agent(query: str, run_id: str = None, replay_session_id: str 
                     })
         else:
             final_text = message.get("content", "")
-            print(f"\n🏁 Final Agent Answer:\n{final_text}\n")
+            print("\n" + "─" * 65)
+            print("🏁 Final Agent Output:")
+            print("─" * 65)
+            print(f"{final_text}\n")
+            print("─" * 65)
             break
 
-    print(f"✓ Run complete. Inspect steps at: http://127.0.0.1:8000/api/runs/{run_id}/steps\n")
+    print(f"✓ Recorded in Black Box.")
+    print(f"🔍 Inspect structured steps: http://127.0.0.1:8000/api/runs/{run_id}/steps\n")
 
 
 if __name__ == "__main__":
-    test_query = "What is 154 * 28, and what is that result divided by 4?"
-    asyncio.run(run_math_agent(test_query))
+    asyncio.run(run_math_agent())

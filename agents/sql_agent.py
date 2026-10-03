@@ -1,6 +1,6 @@
 """
-Benchmark Agent 2: SQL Database Query Agent
-Inspects SQLite schema, executes queries, and returns formatted data via Black Box.
+Benchmark Agent 2: SQL Database Agent (Interactive)
+Specialty: Converts natural language questions into executable SQL queries, runs them against an actual SQLite database, and interprets results.
 """
 
 import asyncio
@@ -10,7 +10,7 @@ import uuid
 from typing import Dict, Any, List
 from agents.common import call_gemini_via_blackbox
 
-# In-memory demo SQLite database
+# In-memory product database
 db_conn = sqlite3.connect(":memory:")
 cursor = db_conn.cursor()
 cursor.execute("CREATE TABLE products (id INTEGER, name TEXT, category TEXT, price REAL, stock INTEGER)")
@@ -20,6 +20,8 @@ cursor.executemany("INSERT INTO products VALUES (?, ?, ?, ?, ?)", [
     (3, "Standing Desk", "Furniture", 450.00, 10),
     (4, "Ergonomic Chair", "Furniture", 299.50, 22),
     (5, "USB-C Cable", "Electronics", 12.50, 140),
+    (6, "4K Monitor", "Electronics", 399.00, 18),
+    (7, "Noise Cancelling Headphones", "Audio", 199.99, 45),
 ])
 db_conn.commit()
 
@@ -41,13 +43,13 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "run_sql_query",
-            "description": "Executes a SQL query on the `products` table (schema: id, name, category, price, stock).",
+            "description": "Executes a SQL query on table `products` (id, name, category, price, stock).",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "SQL SELECT query to execute, e.g. 'SELECT name, price FROM products WHERE category = \"Furniture\"'",
+                        "description": "SQL SELECT statement to execute against products table.",
                     }
                 },
                 "required": ["query"],
@@ -57,25 +59,37 @@ TOOLS = [
 ]
 
 
-async def run_sql_agent(query: str, run_id: str = None, replay_session_id: str = None):
-    run_id = run_id or f"sql_run_{uuid.uuid4().hex[:8]}"
-    print(f"\n🚀 Running SQL Agent (Run ID: {run_id})")
-    print(f"❓ User Request: {query}\n")
+async def run_sql_agent():
+    print("\n" + "=" * 65)
+    print("  🗄️ SQL Database Agent (Interactive Mode)")
+    print("  Specialty: Translates natural language to SQL queries and executes them live")
+    print("  Database Table: `products` (id, name, category, price, stock)")
+    print("=" * 65)
+
+    user_query = input("\nAsk a question about products/inventory (or 'exit'): ").strip()
+    if not user_query or user_query.lower() == "exit":
+        return
+
+    run_id = f"sql_run_{uuid.uuid4().hex[:8]}"
+    print(f"\n🚀 Execution Started | Run ID: {run_id}")
+    print(f"❓ Prompt: {user_query}\n")
 
     messages = [
-        {"role": "system", "content": "You are a database analyst assistant. Use the run_sql_query tool to query the products table."},
-        {"role": "user", "content": query},
+        {
+            "role": "system",
+            "content": "You are a database analyst. The database has one table: `products` with columns (id, name, category, price, stock). You MUST use the `run_sql_query` tool to execute queries.",
+        },
+        {"role": "user", "content": user_query},
     ]
 
-    max_turns = 5
+    max_turns = 6
     for turn in range(max_turns):
-        print(f"--- Turn {turn + 1} ---")
+        print(f"🔄 Turn {turn + 1}: Contacting Gemini via Black Box...")
         response = await call_gemini_via_blackbox(
             messages=messages,
             run_id=run_id,
             agent_name="sql_agent",
             tools=TOOLS,
-            replay_session_id=replay_session_id,
         )
 
         choice = response["choices"][0]
@@ -86,12 +100,17 @@ async def run_sql_agent(query: str, run_id: str = None, replay_session_id: str =
         if tool_calls:
             for tc in tool_calls:
                 func_name = tc["function"]["name"]
-                args = json.loads(tc["function"]["arguments"])
-                print(f"🔧 Tool Call: {func_name}({args})")
+                try:
+                    args = json.loads(tc["function"]["arguments"])
+                except Exception:
+                    args = {"query": tc["function"]["arguments"]}
+
+                print(f"  ⚡ Agent Action: Decided to query database using `{func_name}`")
+                print(f"  📥 SQL Query Generated: {args.get('query')}")
 
                 if func_name == "run_sql_query":
                     result = run_sql_query(args.get("query", ""))
-                    print(f"💡 Tool Result: {result}")
+                    print(f"  📤 DB Rows Returned: {result}\n")
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tc["id"],
@@ -99,12 +118,16 @@ async def run_sql_agent(query: str, run_id: str = None, replay_session_id: str =
                     })
         else:
             final_text = message.get("content", "")
-            print(f"\n🏁 Final Agent Answer:\n{final_text}\n")
+            print("\n" + "─" * 65)
+            print("🏁 Final Agent Output:")
+            print("─" * 65)
+            print(f"{final_text}\n")
+            print("─" * 65)
             break
 
-    print(f"✓ Run complete. Inspect steps at: http://127.0.0.1:8000/api/runs/{run_id}/steps\n")
+    print(f"✓ Recorded in Black Box.")
+    print(f"🔍 Inspect structured steps: http://127.0.0.1:8000/api/runs/{run_id}/steps\n")
 
 
 if __name__ == "__main__":
-    test_query = "What is the most expensive furniture item, and how many are currently in stock?"
-    asyncio.run(run_sql_agent(test_query))
+    asyncio.run(run_sql_agent())
