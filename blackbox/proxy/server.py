@@ -20,7 +20,7 @@ from typing import AsyncGenerator, Dict, Optional, Any, List
 import httpx
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse, FileResponse, HTMLResponse
 from pydantic import BaseModel, Field
 
 from blackbox.config import get_settings
@@ -405,3 +405,14 @@ async def update_run_status(run_id: str, body: RunStatusUpdate):
 async def stats():
     total = await TraceRecorder.count_runs()
     return {"total_runs": total}
+
+
+# ── Web UI Dashboard Routes ───────────────────────────────────────────────────
+
+@app.get("/", include_in_schema=False)
+@app.get("/dashboard", include_in_schema=False)
+async def serve_dashboard():
+    dashboard_path = os.path.join(os.path.dirname(__file__), "..", "web", "index.html")
+    if os.path.exists(dashboard_path):
+        return FileResponse(dashboard_path, media_type="text/html")
+    return HTMLResponse("<h1>Black Box Dashboard: index.html not found</h1>", status_code=404)

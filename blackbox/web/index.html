@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BLACK BOX | AI Agent Flight Recorder</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        dark: {
+                            900: '#0B0F19',
+                            800: '#111827',
+                            700: '#1F2937',
+                            600: '#374151'
+                        },
+                        brand: {
+                            500: '#6366F1',
+                            600: '#4F46E5',
+                            accent: '#10B981'
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: #0B0F19; }
+        ::-webkit-scrollbar-thumb { background: #374151; border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: #4B5563; }
+        .glass { background: rgba(17, 24, 39, 0.7); backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.08); }
+    </style>
+</head>
+<body class="bg-dark-900 text-slate-100 font-sans antialiased min-h-screen flex flex-col selection:bg-brand-500 selection:text-white">
+
+    <!-- Top Navigation Bar -->
+    <header class="glass sticky top-0 z-50 border-b border-slate-800 px-6 py-3.5 flex items-center justify-between">
+        <div class="flex items-center space-x-3">
+            <div class="h-9 w-9 rounded-xl bg-gradient-to-tr from-brand-600 to-indigo-400 flex items-center justify-center shadow-lg shadow-indigo-500/20">
+                <i data-lucide="box" class="h-5 w-5 text-white"></i>
+            </div>
+            <div>
+                <div class="flex items-center space-x-2">
+                    <span class="font-extrabold text-lg tracking-wider bg-clip-text text-transparent bg-gradient-to-r from-white via-slate-200 to-slate-400">BLACK BOX</span>
+                    <span class="px-2 py-0.5 text-xs font-semibold rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 flex items-center gap-1">
+                        <span class="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse"></span> RECORDER ACTIVE
+                    </span>
+                </div>
+                <p class="text-xs text-slate-400">AI Agent Flight Recorder & Checkpointed Replay Engine</p>
+            </div>
+        </div>
+
+        <div class="flex items-center space-x-4">
+            <button onclick="fetchRuns()" class="px-3 py-1.5 text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg border border-slate-700 flex items-center gap-1.5 transition">
+                <i data-lucide="refresh-cw" class="h-3.5 w-3.5"></i> Refresh Runs
+            </button>
+            <a href="/docs" target="_blank" class="px-3 py-1.5 text-xs font-medium bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 rounded-lg border border-indigo-500/30 flex items-center gap-1.5 transition">
+                <i data-lucide="code" class="h-3.5 w-3.5"></i> API Docs
+            </a>
+        </div>
+    </header>
+
+    <!-- Main Dashboard Container -->
+    <main class="flex-1 flex overflow-hidden">
+
+        <!-- Sidebar: Execution Runs List -->
+        <aside class="w-80 md:w-96 border-r border-slate-800 bg-dark-900 flex flex-col flex-shrink-0">
+            <!-- Sidebar Header & Stats -->
+            <div class="p-4 border-b border-slate-800 space-y-3">
+                <div class="grid grid-cols-3 gap-2">
+                    <div class="glass p-2.5 rounded-lg text-center">
+                        <span class="block text-xs text-slate-400">Total Runs</span>
+                        <span id="stat-total-runs" class="text-lg font-bold text-white">0</span>
+                    </div>
+                    <div class="glass p-2.5 rounded-lg text-center">
+                        <span class="block text-xs text-emerald-400">Success</span>
+                        <span id="stat-success-runs" class="text-lg font-bold text-emerald-400">0</span>
+                    </div>
+                    <div class="glass p-2.5 rounded-lg text-center">
+                        <span class="block text-xs text-rose-400">Failures</span>
+                        <span id="stat-failed-runs" class="text-lg font-bold text-rose-400">0</span>
+                    </div>
+                </div>
+
+                <!-- Search / Filter -->
+                <div class="relative">
+                    <i data-lucide="search" class="h-4 w-4 absolute left-3 top-2.5 text-slate-500"></i>
+                    <input type="text" id="run-search" placeholder="Filter by Agent or Run ID..." 
+                           class="w-full pl-9 pr-3 py-1.5 text-xs bg-dark-800 border border-slate-700 rounded-lg text-slate-200 placeholder-slate-500 focus:outline-none focus:border-brand-500 transition"
+                           oninput="filterRuns()">
+                </div>
+            </div>
+
+            <!-- Runs Scrollable List -->
+            <div id="runs-list" class="flex-1 overflow-y-auto p-3 space-y-2">
+                <div class="text-center py-12 text-slate-500 text-xs">Loading recorded flights...</div>
+            </div>
+        </aside>
+
+        <!-- Right: Execution Graph & Step Timeline -->
+        <section class="flex-1 flex flex-col bg-dark-900/50 overflow-hidden">
+            
+            <!-- Execution Banner -->
+            <div id="active-run-header" class="glass border-b border-slate-800 px-6 py-4 flex items-center justify-between">
+                <div class="flex items-center space-x-3">
+                    <div id="active-status-badge" class="px-2.5 py-1 text-xs font-semibold rounded-md bg-slate-800 text-slate-400 border border-slate-700">
+                        SELECT A RUN
+                    </div>
+                    <div>
+                        <h2 id="active-run-title" class="text-base font-bold text-white">No Execution Selected</h2>
+                        <p id="active-run-subtitle" class="text-xs text-slate-400">Select an agent execution trace from the left panel to inspect steps</p>
+                    </div>
+                </div>
+
+                <div id="active-run-actions" class="hidden flex items-center space-x-3">
+                    <button onclick="compareRunModal()" class="px-3 py-1.5 text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg border border-slate-700 flex items-center gap-1.5 transition">
+                        <i data-lucide="git-compare" class="h-3.5 w-3.5 text-indigo-400"></i> Compare Trace
+                    </button>
+                    <button onclick="triggerQuickReplay()" class="px-3 py-1.5 text-xs font-semibold bg-brand-600 hover:bg-brand-500 text-white rounded-lg shadow-lg shadow-indigo-600/30 flex items-center gap-1.5 transition">
+                        <i data-lucide="play" class="h-3.5 w-3.5"></i> Replay from Checkpoint
+                    </button>
+                </div>
+            </div>
+
+            <!-- Timeline Steps Container -->
+            <div id="steps-container" class="flex-1 overflow-y-auto p-6 space-y-4">
+                <div class="h-full flex flex-col items-center justify-center text-center text-slate-500 space-y-3">
+                    <div class="h-16 w-16 rounded-2xl bg-dark-800 border border-slate-800 flex items-center justify-center">
+                        <i data-lucide="activity" class="h-8 w-8 text-slate-600"></i>
+                    </div>
+                    <div>
+                        <h3 class="text-sm font-semibold text-slate-300">No Trace Selected</h3>
+                        <p class="text-xs text-slate-500 max-w-sm mt-1">Select an intercepted flight log from the left sidebar to inspect step-by-step model reasoning, tool invocations, and observations.</p>
+                    </div>
+                </div>
+            </div>
+
+        </section>
+
+    </main>
+
+    <!-- Replay / Override Modal -->
+    <div id="replay-modal" class="fixed inset-0 bg-black/70 backdrop-blur-sm hidden z-50 flex items-center justify-center p-4">
+        <div class="glass max-w-xl w-full rounded-2xl border border-slate-700 p-6 space-y-4 shadow-2xl">
+            <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+                <div class="flex items-center gap-2">
+                    <i data-lucide="rewind" class="h-5 w-5 text-indigo-400"></i>
+                    <h3 class="text-base font-bold text-white">Checkpointed Replay & Alternative Execution</h3>
+                </div>
+                <button onclick="closeReplayModal()" class="text-slate-400 hover:text-white"><i data-lucide="x" class="h-5 w-5"></i></button>
+            </div>
+
+            <p class="text-xs text-slate-300">
+                Rewind the agent to an intermediate checkpoint. Steps prior to the checkpoint will be served <span class="text-emerald-400 font-semibold">instantly from cache ($0 cost)</span>. Live execution begins from your selected step.
+            </p>
+
+            <div class="space-y-3">
+                <div>
+                    <label class="block text-xs font-semibold text-slate-400 mb-1">Checkpoint Step</label>
+                    <input type="number" id="replay-step-input" min="1" value="2" 
+                           class="w-full px-3 py-2 text-xs bg-dark-800 border border-slate-700 rounded-lg text-white focus:outline-none focus:border-brand-500">
+                </div>
+                <div>
+                    <label class="block text-xs font-semibold text-slate-400 mb-1">Optional Payload Override (JSON format)</label>
+                    <textarea id="replay-override-input" rows="4" placeholder='{"temperature": 0.0, "messages": [...]}'
+                              class="w-full px-3 py-2 text-xs bg-dark-800 border border-slate-700 rounded-lg font-mono text-emerald-300 focus:outline-none focus:border-brand-500"></textarea>
+                </div>
+            </div>
+
+            <div class="flex justify-end space-x-3 pt-2">
+                <button onclick="closeReplayModal()" class="px-4 py-2 text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg">Cancel</button>
+                <button onclick="submitReplaySession()" class="px-4 py-2 text-xs font-semibold bg-brand-600 hover:bg-brand-500 text-white rounded-lg shadow-lg shadow-indigo-600/30 flex items-center gap-1.5">
+                    <i data-lucide="play" class="h-3.5 w-3.5"></i> Launch Replay Session
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- JavaScript Logic -->
+    <script>
+        let allRuns = [];
+        let currentRunId = null;
+
+        document.addEventListener('DOMContentLoaded', () => {
+            lucide.createIcons();
+            fetchRuns();
+        });
+
+        async function fetchRuns() {
+            try {
+                const res = await fetch('/api/runs?limit=100');
+                allRuns = await res.json();
+                renderRuns(allRuns);
+                updateStats(allRuns);
+            } catch (err) {
+                console.error("Error fetching runs:", err);
+            }
+        }
+
+        function updateStats(runs) {
+            document.getElementById('stat-total-runs').textContent = runs.length;
+            const success = runs.filter(r => r.status === 'SUCCESS').length;
+            const failed = runs.filter(r => r.status === 'FAILURE').length;
+            document.getElementById('stat-success-runs').textContent = success;
+            document.getElementById('stat-failed-runs').textContent = failed;
+        }
+
+        function renderRuns(runs) {
+            const list = document.getElementById('runs-list');
+            if (!runs.length) {
+                list.innerHTML = `<div class="text-center py-12 text-slate-500 text-xs">No runs recorded yet.</div>`;
+                return;
+            }
+
+            list.innerHTML = runs.map(run => {
+                const isFailed = run.status === 'FAILURE';
+                const statusColor = isFailed 
+                    ? 'bg-rose-500/10 text-rose-400 border-rose-500/20' 
+                    : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20';
+                const activeClass = run.id === currentRunId ? 'ring-2 ring-brand-500 bg-slate-800/80' : 'hover:bg-slate-800/50';
+
+                return `
+                    <div onclick="selectRun('${run.id}')" 
+                         class="glass p-3 rounded-xl border border-slate-800 cursor-pointer transition ${activeClass}">
+                        <div class="flex items-center justify-between mb-1.5">
+                            <span class="text-xs font-bold text-white truncate max-w-[180px]">${run.agent_name}</span>
+                            <span class="px-2 py-0.5 text-[10px] font-bold rounded-md border ${statusColor}">
+                                ${run.status}
+                            </span>
+                        </div>
+                        <div class="flex items-center justify-between text-[11px] text-slate-400">
+                            <span class="font-mono text-slate-500">${run.id.substring(0, 14)}...</span>
+                            <span>${run.total_calls} calls</span>
+                        </div>
+                        <div class="text-[10px] text-slate-500 mt-1">
+                            ${new Date(run.started_at).toLocaleTimeString()}
+                        </div>
+                    </div>
+                `;
+            }).join('');
+            lucide.createIcons();
+        }
+
+        function filterRuns() {
+            const q = document.getElementById('run-search').value.toLowerCase();
+            const filtered = allRuns.filter(r => 
+                r.agent_name.toLowerCase().includes(q) || 
+                r.id.toLowerCase().includes(q)
+            );
+            renderRuns(filtered);
+        }
+
+        async function selectRun(runId) {
+            currentRunId = runId;
+            renderRuns(allRuns);
+
+            const run = allRuns.find(r => r.id === runId);
+            if (!run) return;
+
+            // Update header
+            document.getElementById('active-run-title').textContent = run.agent_name;
+            document.getElementById('active-run-subtitle').textContent = `Run ID: ${run.id} • Started: ${new Date(run.started_at).toLocaleString()}`;
+            
+            const badge = document.getElementById('active-status-badge');
+            badge.textContent = run.status;
+            badge.className = `px-2.5 py-1 text-xs font-bold rounded-md border ${
+                run.status === 'FAILURE' 
+                    ? 'bg-rose-500/10 text-rose-400 border-rose-500/20' 
+                    : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
+            }`;
+
+            document.getElementById('active-run-actions').classList.remove('hidden');
+
+            // Fetch and render steps
+            const container = document.getElementById('steps-container');
+            container.innerHTML = `<div class="text-center py-12 text-slate-500 text-xs">Reconstructing flight execution graph...</div>`;
+
+            try {
+                const res = await fetch(`/api/runs/${runId}/steps`);
+                if (!res.ok) {
+                    container.innerHTML = `<div class="text-center py-12 text-slate-500 text-xs">No reconstructed steps found for this run.</div>`;
+                    return;
+                }
+                const steps = await res.json();
+                renderSteps(steps);
+            } catch (err) {
+                container.innerHTML = `<div class="text-center py-12 text-rose-400 text-xs">Error loading steps: ${err}</div>`;
+            }
+        }
+
+        function renderSteps(steps) {
+            const container = document.getElementById('steps-container');
+            if (!steps.length) {
+                container.innerHTML = `<div class="text-center py-12 text-slate-500 text-xs">Empty execution graph.</div>`;
+                return;
+            }
+
+            container.innerHTML = steps.map((s, idx) => {
+                let icon = 'message-square';
+                let typeColor = 'text-blue-400 bg-blue-500/10 border-blue-500/20';
+                let badgeLabel = s.step_type;
+
+                if (s.step_type === 'USER_QUERY') {
+                    icon = 'user';
+                    typeColor = 'text-amber-400 bg-amber-500/10 border-amber-500/20';
+                } else if (s.step_type === 'TOOL_CALL') {
+                    icon = 'wrench';
+                    typeColor = 'text-indigo-400 bg-indigo-500/10 border-indigo-500/20';
+                } else if (s.step_type === 'TOOL_OBSERVATION') {
+                    icon = 'database';
+                    typeColor = 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20';
+                } else if (s.step_type === 'FINAL_RESPONSE') {
+                    icon = 'check-circle';
+                    typeColor = 'text-purple-400 bg-purple-500/10 border-purple-500/20';
+                }
+
+                return `
+                    <div class="glass rounded-xl p-5 border border-slate-800 space-y-3 relative group hover:border-slate-700 transition">
+                        <div class="flex items-center justify-between">
+                            <div class="flex items-center space-x-2.5">
+                                <span class="h-6 w-6 rounded-lg bg-slate-800 border border-slate-700 flex items-center justify-center text-xs font-bold text-slate-300">
+                                    ${s.step_index}
+                                </span>
+                                <span class="px-2.5 py-0.5 text-xs font-bold rounded-md border flex items-center gap-1.5 ${typeColor}">
+                                    <i data-lucide="${icon}" class="h-3 w-3"></i> ${badgeLabel}
+                                </span>
+                                ${s.tool_name ? `<span class="text-xs font-mono text-indigo-300 bg-indigo-950/40 px-2 py-0.5 rounded border border-indigo-800">tool: ${s.tool_name}</span>` : ''}
+                            </div>
+                            <div class="flex items-center space-x-2">
+                                <span class="text-[11px] text-slate-500 font-mono">${s.duration_ms.toFixed(1)} ms</span>
+                                <button onclick="openReplayAtStep(${s.step_index})" 
+                                        class="opacity-0 group-hover:opacity-100 px-2 py-1 text-[11px] font-semibold bg-slate-800 hover:bg-brand-600 text-slate-200 hover:text-white rounded border border-slate-700 transition flex items-center gap-1">
+                                    <i data-lucide="rewind" class="h-3 w-3"></i> Replay From Here
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Content Display -->
+                        <div class="bg-dark-900/80 rounded-lg p-3.5 border border-slate-800/80 text-xs font-mono text-slate-300 whitespace-pre-wrap overflow-x-auto leading-relaxed">
+                            ${escapeHtml(s.content || JSON.stringify(s.tool_args, null, 2))}
+                        </div>
+
+                        ${s.tool_args ? `
+                            <div class="space-y-1">
+                                <span class="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Tool Arguments</span>
+                                <div class="bg-dark-800/50 rounded p-2 text-[11px] font-mono text-indigo-300 border border-slate-800">
+                                    ${escapeHtml(JSON.stringify(s.tool_args, null, 2))}
+                                </div>
+                            </div>
+                        ` : ''}
+                    </div>
+                `;
+            }).join('');
+
+            lucide.createIcons();
+        }
+
+        function escapeHtml(str) {
+            if (!str) return '';
+            return str
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#039;");
+        }
+
+        function triggerQuickReplay() {
+            if (!currentRunId) return;
+            document.getElementById('replay-step-input').value = 2;
+            document.getElementById('replay-modal').classList.remove('hidden');
+        }
+
+        function openReplayAtStep(stepIdx) {
+            document.getElementById('replay-step-input').value = stepIdx;
+            document.getElementById('replay-modal').classList.remove('hidden');
+        }
+
+        function closeReplayModal() {
+            document.getElementById('replay-modal').classList.add('hidden');
+        }
+
+        async function submitReplaySession() {
+            const step = parseInt(document.getElementById('replay-step-input').value, 10);
+            const overrideRaw = document.getElementById('replay-override-input').value.trim();
+            let overrideBody = null;
+            if (overrideRaw) {
+                try {
+                    overrideBody = JSON.parse(overrideRaw);
+                } catch(e) {
+                    alert("Invalid JSON payload in override box!");
+                    return;
+                }
+            }
+
+            try {
+                const res = await fetch(`/api/runs/${currentRunId}/replay`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ checkpoint_step: step, override_body: overrideBody })
+                });
+                const data = await res.json();
+                closeReplayModal();
+                alert(`Replay Session Registered!\nSession ID: ${data.replay_session_id}\nSteps < ${step} will be served from cache instantly.`);
+            } catch(e) {
+                alert("Failed to initialize replay: " + e);
+            }
+        }
+    </script>
+</body>
+</html>
