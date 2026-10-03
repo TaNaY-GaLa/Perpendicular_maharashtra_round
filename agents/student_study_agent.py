@@ -161,69 +161,77 @@ def run_study_agent():
     print("\n" + "=" * 70)
     print("  📚 Autonomous Student AI Study & Exam Prep Assistant")
     print("  Tools: Search Notes | Flashcard Creator | Practice Quiz | Study Timetable")
+    print("  (Type 'exit' or 'quit' anytime to leave the assistant)")
     print("=" * 70)
 
-    prompt = input("\nEnter your study request (or press Enter for default): ").strip()
-    if not prompt:
-        prompt = (
-            "I have an exam on 'Recursion' in 4 days. I can study 3 hours each day.\n"
-            "1. Search notes for a quick concept summary of Recursion.\n"
-            "2. Generate flashcards for quick revision.\n"
-            "3. Create a 2-question multiple-choice practice quiz.\n"
-            "4. Build me a structured study timetable."
-        )
-
-    print(f"\n🚀 Agent starting study workflow for query:\n{prompt}\n")
-
-    messages = [
-        {"role": "system", "content": "You are a friendly and structured personal AI tutor. Use all available tools step-by-step to assist the student with revision, testing, and scheduling."},
-        {"role": "user", "content": prompt}
-    ]
-
-    max_steps = 8
-    for step in range(max_steps):
-        print(f"--- Step {step + 1} ---")
-        response = client.chat.completions.create(
-            model="gemini-2.5-flash",
-            messages=messages,
-            tools=STUDENT_TOOLS,
-        )
-
-        choice = response.choices[0]
-        message = choice.message
-        messages.append(message)
-
-        tool_calls = getattr(message, "tool_calls", None)
-        if tool_calls:
-            for tc in tool_calls:
-                fn_name = tc.function.name
-                args = json.loads(tc.function.arguments)
-                print(f"  ⚡ Tool Call: `{fn_name}`")
-                print(f"  📥 Arguments: {args}")
-
-                if fn_name == "search_study_notes":
-                    res = search_study_notes(args.get("topic", ""))
-                elif fn_name == "generate_flashcards":
-                    res = generate_flashcards(args.get("topic", ""), args.get("difficulty", "medium"))
-                elif fn_name == "generate_practice_quiz":
-                    res = generate_practice_quiz(args.get("topic", ""), args.get("num_questions", 2))
-                elif fn_name == "create_study_schedule":
-                    res = create_study_schedule(int(args.get("days_until_exam", 3)), float(args.get("daily_hours", 2.0)))
-                else:
-                    res = json.dumps({"error": f"Unknown tool {fn_name}"})
-
-                print(f"  📤 Tool Result: {res}\n")
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tc.id,
-                    "content": res
-                })
-        else:
-            print("\n" + "=" * 70)
-            print("🏁 Final Exam Prep Plan:")
-            print("=" * 70)
-            print(f"{message.content}\n")
+    while True:
+        prompt = input("\n🎓 Enter your study request (or press Enter for default, 'exit' to quit): ").strip()
+        if prompt.lower() in ["exit", "quit", "q"]:
+            print("\n👋 Goodbye! Good luck with your studies!")
             break
+
+        if not prompt:
+            prompt = (
+                "I have an exam on 'Recursion' in 4 days. I can study 3 hours each day.\n"
+                "1. Search notes for a quick concept summary of Recursion.\n"
+                "2. Generate flashcards for quick revision.\n"
+                "3. Create a 2-question multiple-choice practice quiz.\n"
+                "4. Build me a structured study timetable."
+            )
+
+        print(f"\n🚀 Agent starting study workflow for query:\n{prompt}\n")
+
+        messages = [
+            {"role": "system", "content": "You are a friendly and structured personal AI tutor. Use all available tools step-by-step to assist the student with revision, testing, and scheduling."},
+            {"role": "user", "content": prompt}
+        ]
+
+        max_steps = 8
+        for step in range(max_steps):
+            print(f"--- Step {step + 1} ---")
+            response = client.chat.completions.create(
+                model="gemini-2.5-flash",
+                messages=messages,
+                tools=STUDENT_TOOLS,
+            )
+
+            choice = response.choices[0]
+            message = choice.message
+            messages.append(message)
+
+            tool_calls = getattr(message, "tool_calls", None)
+            if tool_calls:
+                for tc in tool_calls:
+                    fn_name = tc.function.name
+                    args = json.loads(tc.function.arguments)
+                    print(f"  ⚡ Tool Call: `{fn_name}`")
+                    print(f"  📥 Arguments: {args}")
+
+                    if fn_name == "search_study_notes":
+                        res = search_study_notes(args.get("topic", ""))
+                    elif fn_name == "generate_flashcards":
+                        res = generate_flashcards(args.get("topic", ""), args.get("difficulty", "medium"))
+                    elif fn_name == "generate_practice_quiz":
+                        res = generate_practice_quiz(args.get("topic", ""), args.get("num_questions", 2))
+                    elif fn_name == "create_study_schedule":
+                        res = create_study_schedule(int(args.get("days_until_exam", 3)), float(args.get("daily_hours", 2.0)))
+                    else:
+                        res = json.dumps({"error": f"Unknown tool {fn_name}"})
+
+                    print(f"  📤 Tool Result: {res}\n")
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": res
+                    })
+            else:
+                print("\n" + "=" * 70)
+                print("🏁 Final Exam Prep Plan:")
+                print("=" * 70)
+                print(f"{message.content}\n")
+                print("=" * 70)
+                print("✓ Recorded in Black Box.")
+                break
 
 
 if __name__ == "__main__":
