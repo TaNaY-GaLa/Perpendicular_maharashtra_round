@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -291,9 +292,16 @@ async def _forward_and_record(
 
 @app.api_route("/v1/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
 async def proxy_openai_compatible(request: Request, path: str) -> Response:
-    upstream = request.headers.get(HEADER_TARGET_BASE, settings.openai_base_url).rstrip("/")
-    # Forward to the exact endpoint requested
-    forward_path = f"chat/{path}" if upstream.endswith("/chat") else path
+    # If target base is explicitly provided via header, use it; otherwise default to Google Gemini OpenAI base if GOOGLE_API_KEY is present
+    target_base = request.headers.get(HEADER_TARGET_BASE)
+    if not target_base:
+        if settings.google_api_key or os.getenv("GOOGLE_API_KEY"):
+            target_base = "https://generativelanguage.googleapis.com/v1beta/openai"
+        else:
+            target_base = settings.openai_base_url
+
+    upstream = target_base.rstrip("/")
+    forward_path = path
     return await _forward_and_record(request, "openai", upstream, forward_path)
 
 
